@@ -121,13 +121,19 @@ def _validate_codex_reasoning_effort(
     )
 
 
+# Built-in Gemini aliases accepted by the Gemini CLI as `--model` values.
+# `auto` lets the CLI pick the best model per request; `pro`/`flash`/`flash-lite`
+# select the latest model of that tier without pinning a specific version.
+_GEMINI_ALIAS_ORDER: tuple[str, ...] = ("auto", "pro", "flash", "flash-lite")
+
+
 def _gemini_models_for_selector() -> list[str]:
-    """Return Gemini models discovered from local Gemini CLI files."""
+    """Return Gemini built-in aliases, then models discovered from the CLI files."""
     models = sorted(get_gemini_models())
     # Prefer stable models before previews in the selector.
     stable = [model for model in models if "preview" not in model]
     preview = [model for model in models if "preview" in model]
-    return [*stable, *preview]
+    return [*_GEMINI_ALIAS_ORDER, *stable, *preview]
 
 
 def _button_label(model_id: str) -> str:

@@ -191,6 +191,21 @@ async def test_start_one_provider_gemini_uses_discovered_models(orch: Orchestrat
     assert "3-pro-preview" in labels
 
 
+async def test_start_one_provider_gemini_includes_builtin_aliases(orch: Orchestrator) -> None:
+    set_gemini_models(frozenset({"gemini-2.5-pro", "gemini-2.5-flash"}))
+    with _patch_auth(
+        {"claude": _NOT_FOUND_CLAUDE, "codex": _NOT_FOUND_CODEX, "gemini": _AUTHED_GEMINI}
+    ):
+        resp = await model_selector_start(orch, SessionKey(chat_id=1))
+    assert resp.buttons is not None
+    labels = [btn.text for row in resp.buttons.rows for btn in row]
+    # Built-in CLI aliases come first so the user can pick auto-routing without
+    # pinning a specific model version.
+    for alias in ("auto", "pro", "flash", "flash-lite"):
+        assert alias in labels
+    assert labels.index("auto") < labels.index("2.5-pro")
+
+
 # -- handle_model_callback: provider selection --
 
 
