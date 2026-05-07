@@ -172,12 +172,26 @@ async def _reset_on_error(
     orch: Orchestrator,
     key: SessionKey,
     *,
+    session: SessionData | None = None,   # [PATCH] 세션 보존용
+    response: AgentResponse | None = None, # [PATCH] 세션 ID 추출용
     model_name: str,
     provider_name: str,
     cli_detail: str = "",
 ) -> OrchestratorResult:
-    """Kill processes, preserve session, return user-facing error."""
+    """Kill processes, preserve session for resume, return user-facing error."""
     await orch._process_registry.kill_all(key.chat_id)
+    # [PATCH] rate limit 등 에러 시에도 session_id를 보존하여
+    # 다음 메시지에서 --resume으로 컨텍스트를 이어갈 수 있도록 함.
+    if session is not None and response is not None:
+        if response.session_id and response.session_id != session.session_id:
+            logger.debug(
+                "Error: preserving session_id %s for resume",
+                response.session_id[:8],
+            )
+            session.session_id = response.session_id
+        await orch._sessions.update_session(
+            session, cost_usd=response.cost_usd, tokens=response.total_tokens
+        )
     logger.warning("Session error preserved model=%s provider=%s", model_name, provider_name)
     return OrchestratorResult(
         text=session_error_text(model_name, cli_detail),
@@ -468,6 +482,11 @@ async def normal(  # noqa: PLR0911
         _reg = orch._process_registry
         if _reg.was_aborted(key.chat_id) or _reg.was_interrupted(key.chat_id):
             _reg.clear_interrupt(key.chat_id)
+            # Preserve session_id on abort so /stop doesn't lose the session
+            if response.session_id and not session.session_id:
+                logger.debug("Abort: preserving session_id %s", response.session_id[:8])
+                session.session_id = response.session_id
+                await orch._sessions.update_session(session)
             logger.info("Normal flow aborted/interrupted by user")
             return OrchestratorResult(text="")
         if response.timed_out:
@@ -480,6 +499,8 @@ async def normal(  # noqa: PLR0911
             return await _reset_on_error(
                 orch,
                 key,
+                session=session,          # [PATCH] 세션 보존
+                response=response,        # [PATCH] 세션 ID 추출
                 model_name=model_name,
                 provider_name=provider_name,
                 cli_detail=response.result,
@@ -546,6 +567,11 @@ async def normal_streaming(  # noqa: PLR0911
         _reg = orch._process_registry
         if _reg.was_aborted(key.chat_id) or _reg.was_interrupted(key.chat_id):
             _reg.clear_interrupt(key.chat_id)
+            # Preserve session_id on abort so /stop doesn't lose the session
+            if response.session_id and not session.session_id:
+                logger.debug("Abort: preserving session_id %s", response.session_id[:8])
+                session.session_id = response.session_id
+                await orch._sessions.update_session(session)
             logger.info("Streaming flow aborted/interrupted by user")
             return OrchestratorResult(text="")
         if response.timed_out:
@@ -558,6 +584,8 @@ async def normal_streaming(  # noqa: PLR0911
             return await _reset_on_error(
                 orch,
                 key,
+                session=session,          # [PATCH] 세션 보존
+                response=response,        # [PATCH] 세션 ID 추출
                 model_name=model_name,
                 provider_name=provider_name,
                 cli_detail=response.result,
