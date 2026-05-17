@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -213,12 +214,15 @@ async def execute_one_shot(
     provider: str,
     timeout_seconds: float,
     timeout_label: str,
+    extra_env: dict[str, str] | None = None,
 ) -> OneShotExecutionResult:
     """Run one provider CLI command with timeout and normalized status/result."""
     stdin_input = one_shot.stdin_input
+    env = {**os.environ, **extra_env} if extra_env else None
     proc = await asyncio.create_subprocess_exec(
         *one_shot.cmd,
         cwd=str(cwd),
+        env=env,
         stdin=asyncio.subprocess.PIPE if stdin_input is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

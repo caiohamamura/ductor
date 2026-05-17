@@ -131,6 +131,7 @@ class BackgroundObserver:
                 cwd=self._paths.workspace,
                 timeout_seconds=self._timeout_seconds,
                 timeout_label="Background task",
+                ductor_home=self._paths.ductor_home,
             )
 
             elapsed = time.monotonic() - t0

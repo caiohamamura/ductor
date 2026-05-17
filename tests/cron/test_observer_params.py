@@ -41,6 +41,7 @@ def observer(tmp_path: Path, mock_codex_cache: CodexModelCache) -> CronObserver:
 
     # Mock paths
     paths = MagicMock(spec=DuctorPaths)
+    paths.ductor_home = tmp_path
     paths.cron_jobs_path = tmp_path / "cron_jobs.json"
     paths.cron_tasks_dir = tmp_path / "cron_tasks"
     paths.cron_tasks_dir.mkdir(exist_ok=True)

@@ -32,6 +32,7 @@ async def run_oneshot_task(
     cwd: Path,
     timeout_seconds: float,
     timeout_label: str,
+    ductor_home: Path | None = None,
 ) -> TaskResult:
     """Build the CLI command and execute it, returning a normalized result.
 
@@ -49,12 +50,14 @@ async def run_oneshot_task(
             execution=None,
         )
 
+    extra_env = {"DUCTOR_HOME": str(ductor_home)} if ductor_home is not None else None
     execution = await execute_one_shot(
         one_shot,
         cwd=cwd,
         provider=exec_config.provider,
         timeout_seconds=timeout_seconds,
         timeout_label=timeout_label,
+        extra_env=extra_env,
     )
 
     return TaskResult(
@@ -122,6 +125,7 @@ async def execute_in_task_folder(  # noqa: PLR0913
             cwd=folder,
             timeout_seconds=timeout_seconds,
             timeout_label=task_label,
+            ductor_home=observer._paths.ductor_home,
         )
 
         if result.execution is not None:
