@@ -338,7 +338,7 @@ class TestParseOutput:
     def test_stdin_notice_stdout_only_is_removed(self) -> None:
         resp = CodexCLI._parse_output(b"Reading prompt from stdin...\n", b"", 1)
         assert resp.is_error is True
-        assert resp.result == ""
+        assert resp.result == "Codex failed before producing a final response."
 
     def test_non_streaming_turn_failed_error_beats_stdin_notice(self) -> None:
         raw = "\n".join(
@@ -355,6 +355,25 @@ class TestParseOutput:
         resp = CodexCLI._parse_output(raw.encode(), b"thread not found", 1)
         assert resp.is_error is True
         assert resp.result == "You've hit your usage limit."
+
+    def test_non_streaming_protocol_only_error_does_not_leak_jsonl(self) -> None:
+        raw = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "th-42"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "command_execution", "command": "sleep 10"},
+                    }
+                ),
+                json.dumps({"type": "turn.completed", "usage": {"input_tokens": 12}}),
+            ]
+        )
+        resp = CodexCLI._parse_output(raw.encode(), b"", 1)
+        assert resp.is_error is True
+        assert resp.result == "Codex failed before producing a final response."
+        assert "thread.started" not in resp.result
+        assert "command_execution" not in resp.result
 
     def test_successful_jsonl_output(self) -> None:
         lines = "\n".join(

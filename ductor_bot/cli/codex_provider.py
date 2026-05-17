@@ -43,6 +43,7 @@ _CODEX_STDIN_NOTICE_PREFIXES = (
     "Reading prompt from stdin",
     "Reading additional input from stdin",
 )
+_CODEX_NO_FINAL_RESPONSE = "Codex failed before producing a final response."
 
 
 class _StreamState:
@@ -261,7 +262,10 @@ class CodexCLI(BaseCLI):
         if result_text:
             result = result_text
         elif is_error:
-            result = parsed_error or cleaned_stderr or cleaned_stdout
+            stdout_fallback = "" if _is_codex_protocol_only(raw) else cleaned_stdout
+            result = parsed_error or cleaned_stderr or stdout_fallback or _CODEX_NO_FINAL_RESPONSE
+        elif _is_codex_protocol_only(raw):
+            result = _CODEX_NO_FINAL_RESPONSE
         else:
             result = raw
         response = CLIResponse(
@@ -340,6 +344,31 @@ def _is_codex_stdin_notice(line: str) -> bool:
 def _strip_codex_stdin_notices(text: str) -> str:
     """Remove stdin notice lines from Codex stdout/stderr text."""
     return "\n".join(line for line in text.splitlines() if not _is_codex_stdin_notice(line)).strip()
+
+
+def _is_codex_protocol_only(raw: str) -> bool:
+    """Return True when stdout contains only Codex JSONL protocol events."""
+    saw_protocol_event = False
+    for raw_line in raw.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or _is_codex_stdin_notice(stripped):
+            continue
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(data, dict):
+            return False
+        if (
+            isinstance(data.get("type"), str)
+            or isinstance(data.get("item"), dict)
+            or isinstance(data.get("thread_id"), str)
+            or isinstance(data.get("usage"), dict)
+        ):
+            saw_protocol_event = True
+            continue
+        return False
+    return saw_protocol_event
 
 
 def _extract_codex_error_detail(raw: str) -> str:
