@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import logging
 import mimetypes
+import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError
+from aiogram.types import ReplyParameters
 
 from ductor_bot.files.image_processor import process_image
 from ductor_bot.files.prompt import MediaInfo
@@ -17,12 +23,17 @@ from ductor_bot.files.prompt import build_media_prompt as _build_media_prompt_ge
 from ductor_bot.files.storage import prepare_destination as _prepare_destination
 from ductor_bot.files.storage import sanitize_filename as _sanitize_filename
 from ductor_bot.files.storage import update_index
+from ductor_bot.messenger.telegram.message_dispatch import ReactionTracker
+from ductor_bot.messenger.telegram.topic import get_thread_id
 
 if TYPE_CHECKING:
     from aiogram import Bot
     from aiogram.types import Message
 
 logger = logging.getLogger(__name__)
+
+_TRANSCRIBE_TIMEOUT_SECONDS = 300
+_TRANSCRIPT_PREVIEW_LIMIT = 3200
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +146,8 @@ async def resolve_media_text(
     message: Message,
     telegram_files_dir: Path,
     workspace: Path,
+    *,
+    status_reaction: bool = True,
 ) -> str | None:
     """Download media from *message*, update index, return agent prompt.
 
@@ -156,6 +169,19 @@ async def resolve_media_text(
         await asyncio.to_thread(update_index, telegram_files_dir)
     except (OSError, yaml.YAMLError):
         logger.warning("Index update failed", exc_info=True)
+
+    if info.original_type in ("voice", "audio"):
+        tracker = ReactionTracker(
+            bot,
+            message.chat.id,
+            message.message_id,
+            enabled=status_reaction,
+        )
+        await tracker.set_audio_transcribing()
+        status_message = await _send_transcription_status(bot, message)
+        transcribed = await _with_audio_transcript(info, workspace)
+        info = transcribed if transcribed is not None else _with_transcript_error(info)
+        await _edit_transcription_status(bot, status_message, info)
 
     return build_media_prompt(info, workspace)
 
@@ -284,3 +310,141 @@ def _extract_sticker(msg: Message) -> _MediaTuple | None:
 def build_media_prompt(info: MediaInfo, workspace: Path) -> str:
     """Build the Telegram-specific prompt for a received media file."""
     return _build_media_prompt_generic(info, workspace, transport="Telegram")
+
+
+async def _with_audio_transcript(info: MediaInfo, workspace: Path) -> MediaInfo | None:
+    """Return *info* enriched with a transcript, or ``None`` on failure."""
+    script = workspace / "tools" / "media_tools" / "transcribe_audio.py"
+    if not script.exists():
+        logger.warning("Audio transcription tool missing at %s", script)
+        return None
+
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(script),
+        "--file",
+        str(info.path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=_TRANSCRIBE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        logger.warning("Audio transcription timed out for %s", info.path)
+        return None
+
+    stdout_text = stdout.decode("utf-8", errors="replace").strip()
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        logger.warning(
+            "Audio transcription failed path=%s rc=%s stderr=%s stdout=%s",
+            info.path,
+            proc.returncode,
+            stderr_text[:500],
+            stdout_text[:500],
+        )
+        return None
+
+    parsed = _parse_transcription_stdout(stdout_text, info.path)
+    if parsed is None:
+        return None
+    transcript, method = parsed
+    transcript = transcript.strip()
+    if not transcript:
+        logger.warning("Audio transcription returned an empty transcript for %s", info.path)
+        return None
+
+    return MediaInfo(
+        path=info.path,
+        media_type=info.media_type,
+        file_name=info.file_name,
+        caption=info.caption,
+        original_type=info.original_type,
+        transcript=transcript,
+        transcript_method=method,
+    )
+
+
+def _parse_transcription_stdout(stdout_text: str, path: Path) -> tuple[str, str | None] | None:
+    try:
+        result = json.loads(stdout_text)
+    except json.JSONDecodeError:
+        return stdout_text, "external"
+
+    if not isinstance(result, dict):
+        logger.warning("Audio transcription returned non-object JSON for %s", path)
+        return None
+    transcript_value = result.get("transcript")
+    if not isinstance(transcript_value, str):
+        logger.warning("Audio transcription returned no transcript for %s", path)
+        return None
+    method_value = result.get("method")
+    method = method_value if isinstance(method_value, str) else None
+    return transcript_value, method
+
+
+def _with_transcript_error(info: MediaInfo) -> MediaInfo:
+    return MediaInfo(
+        path=info.path,
+        media_type=info.media_type,
+        file_name=info.file_name,
+        caption=info.caption,
+        original_type=info.original_type,
+        transcript_error="Direct audio transcription did not produce a transcript.",
+    )
+
+
+async def _send_transcription_status(bot: Bot, message: Message) -> Message | None:
+    try:
+        return await bot.send_message(
+            chat_id=message.chat.id,
+            text="\U0001f399\ufe0f Transcrevendo áudio...",
+            reply_parameters=ReplyParameters(
+                message_id=message.message_id,
+                allow_sending_without_reply=True,
+            ),
+            message_thread_id=get_thread_id(message),
+        )
+    except TelegramAPIError:
+        logger.debug("Failed to send audio transcription status", exc_info=True)
+        return None
+
+
+async def _edit_transcription_status(
+    bot: Bot,
+    status_message: Message | None,
+    info: MediaInfo,
+) -> None:
+    if status_message is None:
+        return
+
+    if info.transcript:
+        transcript = html.escape(_truncate_transcript(info.transcript))
+        text = f"\u2705 <b>Transcrição do áudio</b>\n\n{transcript}"
+    else:
+        error = html.escape(info.transcript_error or "Não foi possível transcrever o áudio.")
+        text = f"\u26a0\ufe0f <b>Não consegui transcrever o áudio</b>\n\n{error}"
+
+    try:
+        await bot.edit_message_text(
+            chat_id=status_message.chat.id,
+            message_id=status_message.message_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramAPIError:
+        logger.debug("Failed to edit audio transcription status", exc_info=True)
+
+
+def _truncate_transcript(transcript: str) -> str:
+    if len(transcript) <= _TRANSCRIPT_PREVIEW_LIMIT:
+        return transcript
+    return f"{transcript[:_TRANSCRIPT_PREVIEW_LIMIT].rstrip()}..."

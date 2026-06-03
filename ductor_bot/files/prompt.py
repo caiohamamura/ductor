@@ -16,6 +16,9 @@ class MediaInfo:
     media_type: str
     original_type: str
     path: Path
+    transcript: str | None = None
+    transcript_method: str | None = None
+    transcript_error: str | None = None
 
 
 def build_media_prompt(
@@ -43,11 +46,25 @@ def build_media_prompt(
         "Check tools/media_tools/CLAUDE.md for file handling instructions.",
     ]
 
-    if info.original_type in ("voice", "audio"):
-        lines.append(
-            "This is an audio/voice message. Use "
-            f"tools/media_tools/transcribe_audio.py --file {rel_path} "
-            "to transcribe it, then respond to the content."
+    if info.original_type in ("voice", "audio") and info.transcript:
+        lines.extend(
+            [
+                "",
+                "[VOICE MESSAGE TRANSCRIPT]",
+                info.transcript,
+            ]
+        )
+        if info.transcript_method:
+            lines.append(f"Transcription method: {info.transcript_method}")
+        lines.append("Respond to the user's transcribed voice message.")
+    elif info.original_type in ("voice", "audio"):
+        lines.extend(
+            [
+                "",
+                "[VOICE MESSAGE TRANSCRIPTION FAILED]",
+                info.transcript_error or "No transcript was produced.",
+                "Tell the user the voice message could not be transcribed and ask them to resend or clarify.",
+            ]
         )
 
     if info.original_type in ("video", "video_note"):

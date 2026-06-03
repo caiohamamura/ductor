@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ductor_bot.messenger.telegram.message_dispatch import (
+    _REACTION_AUDIO_TRANSCRIBING,
     _REACTION_DEFAULT,
     _REACTION_SYSTEM,
     _REACTION_THINKING,
@@ -60,6 +61,7 @@ async def test_reaction_tracker_stages_map_to_emoji() -> None:
     tracker = ReactionTracker(bot, chat_id=1, message_id=42, enabled=True)
 
     await tracker.set_thinking()
+    await tracker.set_audio_transcribing()
     await tracker.set_tool("Read")  # 👀
     await tracker.set_tool("Edit")  # ✍️
     await tracker.set_tool("Bash")  # 👨‍💻
@@ -70,6 +72,7 @@ async def test_reaction_tracker_stages_map_to_emoji() -> None:
     emitted = _emitted_emojis(bot)
     assert emitted == [
         _REACTION_THINKING,
+        _REACTION_AUDIO_TRANSCRIBING,
         "\U0001f440",
         "✍️",
         "\U0001f468‍\U0001f4bb",

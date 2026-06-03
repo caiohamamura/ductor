@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
 from aiogram.types import Message
@@ -34,6 +34,8 @@ def _make_message(
     msg.entities = None
     msg.reply_to_message = None
     msg.answer = MagicMock()
+    msg.is_topic_message = False
+    msg.message_thread_id = None
 
     # Media attributes
     msg.photo = None
@@ -431,7 +433,8 @@ class TestTelegramBuildMediaPrompt:
             original_type="voice",
         )
         prompt = build_media_prompt(info, tmp_path)
-        assert "transcribe_audio.py" in prompt
+        assert "[VOICE MESSAGE TRANSCRIPTION FAILED]" in prompt
+        assert "transcribe_audio.py" not in prompt
 
     def test_caption(self, tmp_path: Path) -> None:
         from ductor_bot.messenger.telegram.media import build_media_prompt
@@ -445,3 +448,101 @@ class TestTelegramBuildMediaPrompt:
         )
         prompt = build_media_prompt(info, tmp_path)
         assert "User message: Hello!" in prompt
+
+
+class TestResolveMediaTextTranscription:
+    async def test_voice_transcribed_before_prompt(self, tmp_path: Path) -> None:
+        from ductor_bot.files.prompt import MediaInfo
+        from ductor_bot.messenger.telegram.media import resolve_media_text
+
+        workspace = tmp_path / "workspace"
+        telegram_files = workspace / "telegram_files"
+        (workspace / "tools" / "media_tools").mkdir(parents=True)
+        (workspace / "tools" / "media_tools" / "transcribe_audio.py").write_text("# test")
+
+        bot = MagicMock()
+        bot.set_message_reaction = AsyncMock()
+        status_message = MagicMock()
+        status_message.chat.id = 1
+        status_message.message_id = 123
+        bot.send_message = AsyncMock(return_value=status_message)
+        bot.edit_message_text = AsyncMock()
+        msg = _make_message(voice=True)
+        msg.message_id = 99
+        downloaded = MediaInfo(
+            path=telegram_files / "2026-06-03" / "voice.ogg",
+            media_type="audio/ogg",
+            file_name="voice.ogg",
+            caption=None,
+            original_type="voice",
+        )
+
+        with (
+            patch("ductor_bot.messenger.telegram.media.download_media", AsyncMock(return_value=downloaded)),
+            patch("ductor_bot.messenger.telegram.media.update_index"),
+            patch(
+                "ductor_bot.messenger.telegram.media._with_audio_transcript",
+                AsyncMock(
+                    return_value=MediaInfo(
+                        path=downloaded.path,
+                        media_type=downloaded.media_type,
+                        file_name=downloaded.file_name,
+                        caption=downloaded.caption,
+                        original_type=downloaded.original_type,
+                        transcript="Conteudo falado",
+                        transcript_method="external",
+                    )
+                ),
+            ),
+        ):
+            prompt = await resolve_media_text(bot, msg, telegram_files, workspace)
+
+        assert prompt is not None
+        assert "Conteudo falado" in prompt
+        assert "transcribe_audio.py" not in prompt
+        bot.set_message_reaction.assert_awaited_once()
+        reaction = bot.set_message_reaction.call_args.kwargs["reaction"][0]
+        assert reaction.emoji == "\U0001f399\ufe0f"
+        bot.send_message.assert_awaited_once()
+        assert "Transcrevendo áudio" in bot.send_message.call_args.kwargs["text"]
+        bot.edit_message_text.assert_awaited_once()
+        assert "Conteudo falado" in bot.edit_message_text.call_args.kwargs["text"]
+
+    async def test_voice_reports_failed_transcription_without_tool_hint(
+        self, tmp_path: Path
+    ) -> None:
+        from ductor_bot.files.prompt import MediaInfo
+        from ductor_bot.messenger.telegram.media import resolve_media_text
+
+        workspace = tmp_path / "workspace"
+        telegram_files = workspace / "telegram_files"
+        bot = MagicMock()
+        bot.set_message_reaction = AsyncMock()
+        status_message = MagicMock()
+        status_message.chat.id = 1
+        status_message.message_id = 123
+        bot.send_message = AsyncMock(return_value=status_message)
+        bot.edit_message_text = AsyncMock()
+        msg = _make_message(voice=True)
+        msg.message_id = 99
+        downloaded = MediaInfo(
+            path=telegram_files / "2026-06-03" / "voice.ogg",
+            media_type="audio/ogg",
+            file_name="voice.ogg",
+            caption=None,
+            original_type="voice",
+        )
+
+        with (
+            patch("ductor_bot.messenger.telegram.media.download_media", AsyncMock(return_value=downloaded)),
+            patch("ductor_bot.messenger.telegram.media.update_index"),
+            patch("ductor_bot.messenger.telegram.media._with_audio_transcript", AsyncMock(return_value=None)),
+        ):
+            prompt = await resolve_media_text(bot, msg, telegram_files, workspace)
+
+        assert prompt is not None
+        assert "[VOICE MESSAGE TRANSCRIPTION FAILED]" in prompt
+        assert "transcribe_audio.py" not in prompt
+        bot.send_message.assert_awaited_once()
+        bot.edit_message_text.assert_awaited_once()
+        assert "Não consegui transcrever" in bot.edit_message_text.call_args.kwargs["text"]

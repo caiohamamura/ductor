@@ -1403,7 +1403,11 @@ class TelegramBot:
         if has_media(message):
             paths = self._orch.paths
             return await resolve_media_text(
-                self._bot, message, paths.telegram_files_dir, paths.workspace
+                self._bot,
+                message,
+                paths.telegram_files_dir,
+                paths.workspace,
+                status_reaction=self._config.scene.status_reaction,
             )
         if not message.text:
             return None

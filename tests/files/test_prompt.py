@@ -63,16 +63,35 @@ class TestBuildMediaPrompt:
         assert "sent you a file." in prompt
         assert "via" not in prompt.split("file.")[0]
 
-    def test_voice_prompt_includes_transcription_hint(self, tmp_path: Path) -> None:
+    def test_voice_prompt_includes_transcription_failure(self, tmp_path: Path) -> None:
         info = MediaInfo(
             path=tmp_path / "voice.ogg",
             media_type="audio/ogg",
             file_name="voice.ogg",
             caption=None,
             original_type="voice",
+            transcript_error="No speech detected.",
         )
         prompt = build_media_prompt(info, tmp_path)
-        assert "transcribe_audio.py" in prompt
+        assert "[VOICE MESSAGE TRANSCRIPTION FAILED]" in prompt
+        assert "No speech detected." in prompt
+        assert "transcribe_audio.py" not in prompt
+
+    def test_voice_prompt_embeds_transcript_when_available(self, tmp_path: Path) -> None:
+        info = MediaInfo(
+            path=tmp_path / "voice.ogg",
+            media_type="audio/ogg",
+            file_name="voice.ogg",
+            caption=None,
+            original_type="voice",
+            transcript="Marque uma reunião amanhã.",
+            transcript_method="external",
+        )
+        prompt = build_media_prompt(info, tmp_path)
+        assert "[VOICE MESSAGE TRANSCRIPT]" in prompt
+        assert "Marque uma reunião amanhã." in prompt
+        assert "Transcription method: external" in prompt
+        assert "transcribe_audio.py" not in prompt
 
     def test_video_prompt_includes_process_hint(self, tmp_path: Path) -> None:
         info = MediaInfo(

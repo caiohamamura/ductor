@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 _REACTION_THINKING = "\U0001f914"  # 🤔
 _REACTION_SYSTEM = "\U0001f4af"  # 💯
+_REACTION_AUDIO_TRANSCRIBING = "\U0001f399\ufe0f"  # 🎙️
 _REACTION_DEFAULT = _REACTION_THINKING
 
 # Tool-name prefix (lowercase) -> emoji. First matching prefix wins.
@@ -80,6 +81,10 @@ class ReactionTracker:
     async def set_system(self) -> None:
         """Mark a system event (compacting, timeout warning, ...)."""
         await self._apply(_REACTION_SYSTEM)
+
+    async def set_audio_transcribing(self) -> None:
+        """Mark an audio message as being transcribed."""
+        await self._apply(_REACTION_AUDIO_TRANSCRIBING)
 
     async def set_tool(self, tool_name: str) -> None:
         """Map ``tool_name`` to an emoji via ``_REACTION_TOOL_MAP``.
